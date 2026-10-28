@@ -1,0 +1,16 @@
+name: NickSyncX
+version: 1.4.0
+main: dev.legacyheaven.nicksync.LegacyNickSyncPlugin
+description: Synchronizes EssentialsX nicknames across Paper and Velocity servers.
+author: LegacyHeaven
+api-version: '26.2'
+softdepend: [Essentials]
+commands:
+  nicksync:
+    description: Synchronize an EssentialsX nickname across the NickSyncX network.
+    usage: /nicksync [sync [player]|force]
+    aliases: [lns]
+permissions:
+  nicksyncx.sync:
+    description: Allows manual nickname synchronization.
+    default: op

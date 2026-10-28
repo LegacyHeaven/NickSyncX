@@ -1,0 +1,30 @@
+branding:
+  display-name: "NickSyncX"
+
+# Configure this separately on Hub, SMP and CMP.
+server:
+  name: "change-me"
+  # Hub should be 10; SMP and CMP should be 0.
+  weight: 0
+
+migration:
+  # Enable only on Hub to import existing EssentialsX userdata nicknames.
+  enabled: false
+
+network:
+  channel: "legacyheaven:nicksync"
+
+# EssentialsX is detected at runtime. No EssentialsX version is pinned at build time.
+essentialsx:
+  hook: true
+
+commands:
+  permission: "nicksyncx.sync"
+
+# Nickname polling interval in ticks. 20 ticks = approximately one second.
+# The actual EssentialsX API reads/writes must remain on the Bukkit server thread.
+performance:
+  poll-interval-ticks: 20
+
+logging:
+  debug: false

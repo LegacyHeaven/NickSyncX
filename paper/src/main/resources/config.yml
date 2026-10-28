@@ -1,0 +1,24 @@
+branding:
+  display-name: "NickSyncX"
+
+server:
+  name: "change-me"
+  weight: 0
+
+migration:
+  enabled: false
+
+network:
+  channel: "legacyheaven:nicksync"
+
+essentialsx:
+  hook: true
+
+commands:
+  permission: "nicksyncx.sync"
+
+performance:
+  poll-interval-ticks: 6000
+
+logging:
+  debug: false

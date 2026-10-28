@@ -1,0 +1,76 @@
+# NickSyncX Free Distribution License 1.0
+
+Copyright (c) 2026 LegacyHeaven
+
+## 1. Permission
+
+Permission is granted to any person obtaining a copy of the original NickSyncX source code (the "Software") to use, download, copy, fork, modify, and redistribute the Software and modified versions, subject to the conditions of this license.
+
+This permission is worldwide, royalty-free, non-exclusive, and perpetual, subject to compliance with the terms of this license.
+
+Commercial use of the Software is expressly permitted, including use on monetized Minecraft servers, within commercial hosting services, and as part of commercial operations.
+
+## 2. Attribution and Redistribution
+
+When distributing or republishing the Software, in source or binary form, you must:
+
+- Include this license and the original copyright notice.
+- Clearly credit the original project as "NickSyncX by LegacyHeaven" in the project description and accompanying documentation.
+- Clearly identify any modifications made to the Software.
+- Include this license with any redistributed original or modified version.
+- Preserve the applicable terms of this license in any redistribution of the Software or modified versions.
+
+Redistribution must comply with Section 3 of this license.
+
+## 3. Free Distribution and Prohibition of Sale
+
+The Software and all modified versions must always remain freely obtainable and distributable. No person or organization may sell the Software or any modified version, or charge a fee specifically for access to, acquisition of, or redistribution of the Software.
+
+Without limiting this restriction, you may not:
+
+- Sell copies of the Software or any modified version.
+- Charge users a fee to download or obtain the Software or any modified version.
+- Require payment, a paid subscription, a donation, or another financial contribution as a condition of obtaining the Software.
+- Include the Software or any modified version in a paid software bundle or product where payment is required to obtain the Software.
+- Sublicense the Software or any modified version for a fee.
+- Restrict free access to the Software or any modified version in order to sell access to it elsewhere.
+
+These restrictions apply regardless of the extent of modification or whether the Software is distributed in source code or compiled binary form.
+
+Nothing in this section prohibits commercial use of the Software. You may operate monetized servers, offer commercial hosting, charge for installation or configuration services, provide paid support or maintenance, and earn revenue from services or products that use the Software, provided that you do not sell the Software itself or charge specifically for obtaining or redistributing it.
+
+## 4. Third-Party Components
+
+Third-party libraries, dependencies, assets, and other components included with or used by the Software are not relicensed under this license. They remain subject to their respective copyright notices and license terms.
+
+You are responsible for complying with the applicable licenses of third-party components when using or redistributing them.
+
+Nothing in this license grants rights to third-party components beyond those permitted by their respective licenses.
+
+## 5. Disclaimer of Warranty
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, LEGACYHEAVEN AND THE CONTRIBUTORS DISCLAIM ALL WARRANTIES AND CONDITIONS RELATING TO THE SOFTWARE, WHETHER EXPRESS, IMPLIED, STATUTORY, OR OTHERWISE.
+
+## 6. Limitation of Liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, LEGACYHEAVEN AND THE CONTRIBUTORS SHALL NOT BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+THIS INCLUDES, WITHOUT LIMITATION, DIRECT, INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR EXEMPLARY DAMAGES, LOSS OF DATA, LOSS OF PROFITS, BUSINESS INTERRUPTION, OR OTHER COMMERCIAL LOSSES, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+
+## 7. Reservation of Rights
+
+All rights not expressly granted by this license are reserved.
+
+Nothing in this license transfers ownership of the Software or its copyright to any recipient. The copyright remains with LegacyHeaven and the applicable contributors.
+
+## 8. Termination
+
+Any rights granted under this license terminate automatically if you materially violate its terms.
+
+Upon termination, you must cease activities that are no longer authorized under this license. Rights may be reinstated if the violation is corrected and LegacyHeaven expressly agrees to reinstatement in writing.
+
+## 9. Governing Law
+
+This license shall be interpreted in accordance with applicable law. Nothing in this license excludes or limits any rights or protections that cannot lawfully be excluded or limited under applicable law.

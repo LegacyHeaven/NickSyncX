@@ -1,0 +1,8 @@
+{
+  "id": "nicksyncx",
+  "name": "NickSyncX",
+  "version": "${version}",
+  "main": "dev.legacyheaven.nicksync.velocity.LegacyNickSyncVelocity",
+  "description": "Synchronizes only EssentialsX nicknames across Legacy Play.",
+  "authors": ["LegacyHeaven"]
+}

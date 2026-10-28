@@ -1,0 +1,25 @@
+branding:
+  display-name: "NickSyncX"
+
+# NickSyncX proxy configuration. This is the authoritative nickname database.
+network:
+  channel: "legacyheaven:nicksync"
+
+# Valid values: mariadb, mysql, sqlite. MariaDB is recommended for production.
+storage:
+  type: "mariadb"
+  sqlite:
+    file: "nicknames.sqlite"
+  mysql:
+    host: "127.0.0.1"
+    port: 3306
+    database: "legacy_nicksync"
+    username: "legacy_nicksync"
+    password: "CHANGE_ME"
+    parameters: "useSSL=false&serverTimezone=UTC"
+
+logging:
+  debug: false
+
+commands:
+  admin-permission: "nicksyncx.admin"
