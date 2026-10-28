@@ -1,13 +1,13 @@
 # NickSyncX
 
-### EssentialsX nickname synchronization for Paper, Purpur, and Velocity
+### EssentialsX nickname synchronization for Paper, and Velocity
 
-NickSyncX keeps player nicknames aligned across a multi-server network. Paper/Purpur backends read and apply EssentialsX nicknames, while Velocity arbitrates updates and owns persistent storage.
+NickSyncX keeps player nicknames aligned across a multi-server network. Paper backends read and apply EssentialsX nicknames, while Velocity arbitrates updates and owns persistent storage.
 
 ## Features
 
 - Configurable backend names and nickname priority.
-- EssentialsX nickname reads and writes on Paper/Purpur.
+- EssentialsX nickname reads and writes on Paper.
 - Five-minute polling by default, plus join and leave change checks.
 - Red feedback when a lower-priority update is rejected.
 - A player force command for overriding backend priority.
@@ -28,7 +28,7 @@ Install the matching artifact on each platform. The Velocity release is shaded w
 ## Requirements
 
 - Java 25
-- Paper/Purpur 26.2-compatible backends
+- Paper 26.2-compatible backends
 - Velocity 3.4-compatible proxy
 - EssentialsX on the Paper/Purpur backends
 - MariaDB, MySQL, or SQLite configured on Velocity
