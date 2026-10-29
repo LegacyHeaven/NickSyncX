@@ -10,5 +10,6 @@ allprojects {
         mavenCentral()
         maven("https://repo.purpurmc.org/snapshots/")
         maven("https://repo.papermc.io/repository/maven-public/")
+        maven("https://nexus.velocitypowered.com/repository/maven-public/")
     }
 }
