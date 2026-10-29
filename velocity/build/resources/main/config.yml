@@ -2,17 +2,21 @@ branding:
   display-name: "NickSyncX"
 
 network:
-  channel: "legacyheaven:nicksync"
+  channel: "nicksync:sync"
 
 storage:
-  type: "mariadb"
+  type: "sqlite"
   sqlite:
     file: "nicknames.sqlite"
+  backup:
+    automatic: true
+    interval-minutes: 60
+    file: "backups/nicksyncx.backup"
   mysql:
     host: "127.0.0.1"
     port: 3306
-    database: "legacy_nicksync"
-    username: "legacy_nicksync"
+    database: "nicksync"
+    username: "nicksync"
     password: "CHANGE_ME"
     parameters: "useSSL=false&serverTimezone=UTC"
 

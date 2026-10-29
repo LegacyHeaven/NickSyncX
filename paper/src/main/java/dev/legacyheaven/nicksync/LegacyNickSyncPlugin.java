@@ -1,6 +1,8 @@
 package dev.legacyheaven.nicksync;
 
+import dev.legacyheaven.nicksync.api.NickSyncNicknameProvider;
 import org.bukkit.Bukkit;
+import org.bukkit.OfflinePlayer;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -9,8 +11,10 @@ import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.plugin.Plugin;
+import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.plugin.messaging.PluginMessageListener;
+import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 
 import java.io.*;
 import java.lang.reflect.Method;
@@ -30,11 +34,10 @@ public final class LegacyNickSyncPlugin extends JavaPlugin implements Listener, 
     private int weight;
     private boolean migrationEnabled;
     private boolean debug;
-    private boolean essentialsHookEnabled;
     private long pollIntervalTicks;
     private final Set<String> warningsIssued = ConcurrentHashMap.newKeySet();
-
-    private Plugin essentials;
+    private final List<HookSpec> hookSpecs = new ArrayList<>();
+    private Object placeholderExpansion;
 
     @Override
     public void onEnable() {
@@ -58,12 +61,14 @@ public final class LegacyNickSyncPlugin extends JavaPlugin implements Listener, 
         }
         brandName = getConfig().getString("branding.display-name", "NickSyncX");
         if (brandName == null || brandName.isBlank()) brandName = "NickSyncX";
-        channel = getConfig().getString("network.channel", "legacyheaven:nicksync");
-        serverName = getConfig().getString("server.name", "change-me");
+        channel = getConfig().getString("network.channel", "nicksync:sync");
+        if (channel == null || channel.isBlank()) channel = "nicksync:sync";
+        serverName = getConfig().getString("server.name", "server-1");
+        if (serverName == null || serverName.isBlank()) serverName = "server-1";
         weight = getConfig().getInt("server.weight", 0);
         migrationEnabled = getConfig().getBoolean("migration.enabled", false);
         debug = getConfig().getBoolean("logging.debug", false);
-        essentialsHookEnabled = getConfig().getBoolean("essentialsx.hook", true);
+        loadHookSpecs();
         long configuredPollInterval = getConfig().getLong("performance.poll-interval-ticks", 6000L);
         if (configuredPollInterval == 20L) {
             configuredPollInterval = 6000L;
@@ -76,58 +81,232 @@ public final class LegacyNickSyncPlugin extends JavaPlugin implements Listener, 
         Bukkit.getMessenger().registerOutgoingPluginChannel(this, channel);
         Bukkit.getMessenger().registerIncomingPluginChannel(this, channel, this);
         Bukkit.getPluginManager().registerEvents(this, this);
-        hookEssentials();
-        Objects.requireNonNull(getCommand("nicksync"), "nicksync command missing from plugin.yml").setExecutor(this::onCommand);
+        org.bukkit.command.PluginCommand command = getCommand("nicksync");
+        if (command != null) {
+            command.setExecutor(this::onCommand);
+            command.setTabCompleter((sender, registeredCommand, alias, args) -> commandSuggestions(args));
+        }
+        else if (!registerPaperCommand()) getLogger().severe("Could not register /nicksync. Check Paper command support and the plugin descriptor.");
+        registerPlaceholderExpansion();
 
         Bukkit.getScheduler().runTaskTimer(this, this::poll, pollIntervalTicks, pollIntervalTicks);
         if (migrationEnabled) Bukkit.getScheduler().runTaskLater(this, this::migrateAtStartup, 40L);
 
-        getLogger().info(brandName + " enabled on " + serverName + " with weight " + weight + ".");
+        logStartup();
     }
 
-    private void hookEssentials() {
-        if (!essentialsHookEnabled) {
-            essentials = null;
-            return;
+    private void loadHookSpecs() {
+        boolean essentialsEnabled = getConfig().getBoolean("hooks.essentialsx.enabled",
+                getConfig().getBoolean("essentialsx.hook", true));
+        hookSpecs.clear();
+        hookSpecs.add(new HookSpec("EssentialsX", essentialsEnabled,
+                getConfig().getString("hooks.essentialsx.plugin-name", "Essentials"),
+                "getUser", "getNickname", "setNickname", null));
+        hookSpecs.add(new HookSpec("CMI", getConfig().getBoolean("hooks.cmi.enabled", false),
+                getConfig().getString("hooks.cmi.plugin-name", "CMI"),
+                "getUser", "getNickName", "setNickName", "com.Zrips.CMI.Containers.CMIUser"));
+        hookSpecs.add(new HookSpec("Custom", getConfig().getBoolean("hooks.custom.enabled", false),
+                getConfig().getString("hooks.custom.plugin-name", ""),
+                getConfig().getString("hooks.custom.user-lookup-method", "getUser"),
+                getConfig().getString("hooks.custom.nickname-getter", "getNickname"),
+                getConfig().getString("hooks.custom.nickname-setter", "setNickname"),
+                getConfig().getString("hooks.custom.user-class", "")));
+    }
+
+    private HookAccess hook(Player player) {
+        if (getConfig().getBoolean("hooks.api.enabled", true)) {
+            RegisteredServiceProvider<NickSyncNicknameProvider> registration =
+                    Bukkit.getServicesManager().getRegistration(NickSyncNicknameProvider.class);
+            if (registration != null && registration.getPlugin().isEnabled()) {
+                HookSpec apiSpec = new HookSpec("API: " + registration.getPlugin().getName(), true,
+                        registration.getPlugin().getName(), "", "", "", "");
+                return new HookAccess(apiSpec, registration.getProvider());
+            }
         }
-        Plugin p = Bukkit.getPluginManager().getPlugin("Essentials");
-        essentials = p != null && p.isEnabled() ? p : null;
+        for (HookSpec spec : hookSpecs) {
+            if (!spec.enabled || spec.pluginName == null || spec.pluginName.isBlank()) continue;
+            Plugin plugin = Bukkit.getPluginManager().getPlugin(spec.pluginName);
+            if (plugin == null || !plugin.isEnabled()) continue;
+            try {
+                if (spec.userClass != null && !spec.userClass.isBlank()) {
+                    Class<?> userType = Class.forName(spec.userClass, true, plugin.getClass().getClassLoader());
+                    Method lookup = userType.getMethod("getUser", Player.class);
+                    if (java.lang.reflect.Modifier.isStatic(lookup.getModifiers())) {
+                        Object result = lookup.invoke(null, player);
+                        if (supportsNicknameApi(result, spec)) return new HookAccess(spec, result);
+                        continue;
+                    }
+                }
+                Object result = plugin.getClass().getMethod(spec.lookupMethod, Player.class).invoke(plugin, player);
+                if (supportsNicknameApi(result, spec)) return new HookAccess(spec, result);
+            } catch (ReflectiveOperationException | LinkageError e) {
+                warnOnce(spec.name + " nickname API unavailable: " + e.getMessage());
+            }
+        }
+        return null;
     }
 
-    private Object user(Player player) {
-        hookEssentials();
-        if (essentials == null) return null;
+    private boolean supportsNicknameApi(Object user, HookSpec spec) {
+        if (user == null) return false;
         try {
-            return essentials.getClass().getMethod("getUser", Player.class).invoke(essentials, player);
+            user.getClass().getMethod(spec.nicknameGetter);
+            try {
+                user.getClass().getMethod(spec.nicknameSetter, String.class, boolean.class);
+            } catch (NoSuchMethodException ignored) {
+                user.getClass().getMethod(spec.nicknameSetter, String.class);
+            }
+            return true;
         } catch (ReflectiveOperationException e) {
-            warnOnce("EssentialsX getUser API unavailable: " + e.getMessage());
-            return null;
+            warnOnce(spec.name + " does not expose the configured nickname methods.");
+            return false;
         }
     }
 
     private String nickname(Player player) {
-        Object user = user(player);
-        if (user == null) return null;
+        HookAccess access = hook(player);
+        if (access == null) return null;
         try {
-            Object value = user.getClass().getMethod("getNickname").invoke(user);
+            if (access.user instanceof NickSyncNicknameProvider provider) {
+                String value = provider.getNickname(player);
+                return value == null ? "" : value;
+            }
+            Object value = access.user.getClass().getMethod(access.spec.nicknameGetter).invoke(access.user);
             return value == null ? "" : value.toString();
-        } catch (ReflectiveOperationException e) {
-            warnOnce("EssentialsX getNickname API unavailable: " + e.getMessage());
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError e) {
+            warnOnce(access.spec.name + " nickname getter unavailable: " + e.getMessage());
             return null;
         }
     }
 
     private boolean applyNickname(Player player, String value) {
-        Object user = user(player);
-        if (user == null) return false;
+        HookAccess access = hook(player);
+        if (access == null) return false;
         try {
-            user.getClass().getMethod("setNickname", String.class)
-                    .invoke(user, value.isEmpty() ? null : value);
+            if (access.user instanceof NickSyncNicknameProvider provider) {
+                provider.setNickname(player, value.isEmpty() ? null : value);
+                return true;
+            }
+            Object nickname = value.isEmpty() ? null : value;
+            try {
+                access.user.getClass().getMethod(access.spec.nicknameSetter, String.class, boolean.class)
+                        .invoke(access.user, nickname, true);
+            } catch (NoSuchMethodException ignored) {
+                access.user.getClass().getMethod(access.spec.nicknameSetter, String.class)
+                        .invoke(access.user, nickname);
+            }
             return true;
-        } catch (ReflectiveOperationException e) {
-            warnOnce("EssentialsX setNickname API unavailable: " + e.getMessage());
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError e) {
+            warnOnce(access.spec.name + " nickname setter unavailable: " + e.getMessage());
             return false;
         }
+    }
+
+    private void registerPlaceholderExpansion() {
+        if (Bukkit.getPluginManager().getPlugin("PlaceholderAPI") == null) return;
+        try {
+            Class<?> expansionClass = Class.forName(getClass().getPackageName() + ".NickSyncPlaceholderExpansion");
+            Object expansion = expansionClass.getConstructor(LegacyNickSyncPlugin.class).newInstance(this);
+            if (Boolean.TRUE.equals(expansionClass.getMethod("register").invoke(expansion))) {
+                placeholderExpansion = expansion;
+            } else {
+                warnOnce("PlaceholderAPI expansion registration failed.");
+            }
+        } catch (ReflectiveOperationException | LinkageError e) {
+            warnOnce("Could not register the PlaceholderAPI expansion: " + e.getMessage());
+        }
+    }
+
+    public String placeholderName(OfflinePlayer player) {
+        if (player == null) return "";
+        Player online = Bukkit.getPlayer(player.getUniqueId());
+        String current = online == null ? null : nickname(online);
+        return current == null || current.isBlank() ? Objects.toString(player.getName(), "") : current;
+    }
+
+    private void logStartup() {
+        String hooks = hookSpecs.stream().filter(spec -> spec.enabled)
+            .map(spec -> spec.name + (spec.pluginName != null
+                && Bukkit.getPluginManager().getPlugin(spec.pluginName) != null ? " on" : " waiting"))
+            .collect(java.util.stream.Collectors.joining(", "));
+        if (hooks.isEmpty()) hooks = "none enabled";
+        getLogger().info("+------------------------------------------+");
+        getLogger().info("| NickSyncX  |  Network nickname sync      |");
+        getLogger().info("| Backend: " + serverName + "  |  Priority: " + weight);
+        getLogger().info("| Nickname hooks: " + hooks);
+        getLogger().info("| Website: https://legacyheaven.dev");
+        getLogger().info("+------------------------------------------+");
+    }
+
+    private boolean registerPaperCommand() {
+        try {
+            Object manager = getClass().getMethod("getLifecycleManager").invoke(this);
+            ClassLoader loader = getClass().getClassLoader();
+            Class<?> events = Class.forName("io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents", true, loader);
+            Object commandEvent = events.getField("COMMANDS").get(null);
+                Class<?> lifecycleEventType = Class.forName(
+                    "io.papermc.paper.plugin.lifecycle.event.types.LifecycleEventType", true, loader);
+            Class<?> eventHandlerType = Class.forName(
+                    "io.papermc.paper.plugin.lifecycle.event.handler.LifecycleEventHandler", true, loader);
+            Object eventHandler = java.lang.reflect.Proxy.newProxyInstance(loader, new Class<?>[] {eventHandlerType},
+                    (proxy, method, args) -> {
+                        if (method.getName().equals("run")) registerPaperBasicCommand(args[0]);
+                        return null;
+                    });
+            Class<?> managerType = Class.forName("io.papermc.paper.plugin.lifecycle.event.LifecycleEventManager", true, loader);
+            Method register = managerType.getMethod("registerEventHandler", lifecycleEventType, eventHandlerType);
+            register.invoke(manager, commandEvent, eventHandler);
+            return true;
+        } catch (ReflectiveOperationException | LinkageError e) {
+            warnOnce("Paper command API is unavailable: " + e.getMessage());
+            return false;
+        }
+    }
+
+    private void registerPaperBasicCommand(Object event) {
+        try {
+            ClassLoader loader = getClass().getClassLoader();
+            Class<?> eventType = Class.forName(
+                    "io.papermc.paper.plugin.lifecycle.event.registrar.ReloadableRegistrarEvent", true, loader);
+            Object registrar = eventType.getMethod("registrar").invoke(event);
+            Class<?> basicCommandType = Class.forName("io.papermc.paper.command.brigadier.BasicCommand", true, loader);
+            Class<?> commandSourceType = Class.forName("io.papermc.paper.command.brigadier.CommandSourceStack", true, loader);
+            Object basicCommand = java.lang.reflect.Proxy.newProxyInstance(loader, new Class<?>[] {basicCommandType},
+                    (proxy, method, args) -> {
+                        if (method.getName().equals("execute")) {
+                            CommandSender sender = (CommandSender) commandSourceType.getMethod("getSender").invoke(args[0]);
+                            onCommand(sender, null, "nicksync", (String[]) args[1]);
+                        } else if (method.getName().equals("suggest")) {
+                            return commandSuggestions((String[]) args[1]);
+                        } else if (method.getName().equals("toString")) {
+                            return "NickSyncX BasicCommand";
+                        } else if (method.getName().equals("hashCode")) {
+                            return System.identityHashCode(proxy);
+                        } else if (method.getName().equals("equals")) {
+                            return proxy == args[0];
+                        }
+                        return null;
+                    });
+            Class<?> commandsType = Class.forName("io.papermc.paper.command.brigadier.Commands", true, loader);
+            Method register = commandsType.getMethod("register", String.class, basicCommandType);
+            register.invoke(registrar, "nicksync", basicCommand);
+            register.invoke(registrar, "lns", basicCommand);
+        } catch (ReflectiveOperationException | LinkageError e) {
+            warnOnce("Could not register the Paper /nicksync command: " + e.getMessage());
+        }
+    }
+
+    private List<String> commandSuggestions(String[] args) {
+        if (args.length <= 1) {
+            String prefix = args.length == 0 ? "" : args[0].toLowerCase(Locale.ROOT);
+            return List.of("sync", "force", "status").stream()
+                    .filter(option -> option.startsWith(prefix)).toList();
+        }
+        if (args.length == 2 && args[0].equalsIgnoreCase("sync")) {
+            String prefix = args[1].toLowerCase(Locale.ROOT);
+            return Bukkit.getOnlinePlayers().stream().map(player -> player.getName())
+                    .filter(name -> name.toLowerCase(Locale.ROOT).startsWith(prefix)).sorted().toList();
+        }
+        return List.of();
     }
 
     private void warnOnce(String message) {
@@ -137,8 +316,7 @@ public final class LegacyNickSyncPlugin extends JavaPlugin implements Listener, 
     }
 
     private void poll() {
-        if (essentials == null) hookEssentials();
-        if (essentials == null) return;
+        if (hookSpecs.stream().noneMatch(spec -> spec.enabled)) return;
 
         for (Player p : Bukkit.getOnlinePlayers()) {
             UUID id = p.getUniqueId();
@@ -162,50 +340,128 @@ public final class LegacyNickSyncPlugin extends JavaPlugin implements Listener, 
 
 
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        String permission = getConfig().getString("commands.permission", "nicksyncx.sync");
+        if (!sender.hasPermission(permission)) {
+            reply(sender, "no-permission");
+            return true;
+        }
+        if (args.length == 1 && args[0].equalsIgnoreCase("status")) {
+            reply(sender, "status-header");
+            String status = providerStatus();
+            for (String line : status.split("\\n")) sender.sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize("&7" + line));
+            return true;
+        }
         boolean force = args.length > 0 && args[0].equalsIgnoreCase("force");
         if (args.length > 0 && !args[0].equalsIgnoreCase("sync") && !force) {
-            sender.sendMessage("§d" + brandName + " §7| §f/nicksync [sync [player]|force]");
+            reply(sender, "usage");
             return true;
         }
         if ((force && args.length != 1) || (!force && args.length > 2)) {
-            sender.sendMessage("§cUsage: /nicksync [sync [player]|force]");
-            return true;
-        }
-        String permission = getConfig().getString("commands.permission", "nicksyncx.sync");
-        if (!sender.hasPermission(permission)) {
-            sender.sendMessage("§cYou do not have permission to use this command.");
+            reply(sender, "usage");
             return true;
         }
         Player target;
         if (force && sender instanceof Player player) {
             target = player;
         } else if (force) {
-            sender.sendMessage("§cOnly a player can force their own nickname.");
+            reply(sender, "player-only");
             return true;
         } else if (args.length >= 2 && args[0].equalsIgnoreCase("sync")) {
             target = Bukkit.getPlayerExact(args[1]);
             if (target == null) {
-                sender.sendMessage("§cThat player must be online on this server.");
+                reply(sender, "player-not-online");
                 return true;
             }
         } else if (sender instanceof Player player) {
             target = player;
         } else {
-            sender.sendMessage("§cUsage: /nicksync sync <player>");
+            reply(sender, "usage-console");
             return true;
         }
         String current = nickname(target);
         if (current == null) {
-            sender.sendMessage("§cCould not read the current nickname. Is EssentialsX enabled and compatible?");
+            reply(sender, "nickname-unavailable");
             return true;
         }
         String action = force ? "FORCE" : "SYNC";
         sendMessage(target, action, target.getUniqueId(), current);
         lastSeen.put(target.getUniqueId(), current);
-        sender.sendMessage("§d" + brandName + " §7| §f" + (force ? "Force request sent" : "Sync request sent")
-            + " for §d" + target.getName() + "§f. Nickname: §d" + (current.isEmpty() ? "(no nickname)" : current)
-            + (force ? "§f. This overrides the current network priority." : "§f. The proxy saves it only if this server has sufficient priority."));
+        reply(sender, force ? "force-sent" : "sync-sent", Map.of(
+                "player", target.getName(),
+                "nickname", current.isEmpty() ? getConfig().getString("messages.no-nickname", "(no nickname)") : current));
         return true;
+    }
+
+    private String providerStatus() {
+        List<String> statuses = new ArrayList<>();
+        String selectedProvider = null;
+        if (getConfig().getBoolean("hooks.api.enabled", true)) {
+            RegisteredServiceProvider<NickSyncNicknameProvider> registration =
+                    Bukkit.getServicesManager().getRegistration(NickSyncNicknameProvider.class);
+            if (registration != null && registration.getPlugin().isEnabled()) {
+                selectedProvider = "API: " + registration.getPlugin().getName();
+                statuses.add(selectedProvider + " (selected)");
+            } else {
+                statuses.add("NickSync API (no provider registered)");
+            }
+        } else {
+            statuses.add("NickSync API (disabled)");
+        }
+        for (HookSpec spec : hookSpecs) {
+            if (!spec.enabled) continue;
+            Plugin plugin = spec.pluginName == null ? null : Bukkit.getPluginManager().getPlugin(spec.pluginName);
+            String state;
+            if (plugin == null) state = "not installed";
+            else if (!plugin.isEnabled()) state = "disabled";
+            else if (!providerApiAvailable(spec, plugin)) state = "API not compatible";
+            else {
+                state = selectedProvider == null ? "selected" : "available fallback";
+                if (selectedProvider == null) selectedProvider = spec.name;
+            }
+            statuses.add(spec.name + " (" + state + ")");
+        }
+        if (statuses.isEmpty()) statuses.add("No nickname providers are enabled.");
+        statuses.add("Selected provider: " + Objects.toString(selectedProvider, "none"));
+        statuses.add("PlaceholderAPI: " + (Bukkit.getPluginManager().getPlugin("PlaceholderAPI") != null ? "available" : "not installed"));
+        statuses.add("Channel: " + channel);
+        return String.join("\n", statuses);
+    }
+
+    private boolean providerApiAvailable(HookSpec spec, Plugin plugin) {
+        try {
+            Class<?> userType;
+            if (spec.userClass != null && !spec.userClass.isBlank()) {
+                Class<?> configuredType = Class.forName(spec.userClass, true, plugin.getClass().getClassLoader());
+                Method lookup = configuredType.getMethod("getUser", Player.class);
+                if (!java.lang.reflect.Modifier.isStatic(lookup.getModifiers())) return false;
+                userType = lookup.getReturnType();
+            } else {
+                userType = plugin.getClass().getMethod(spec.lookupMethod, Player.class).getReturnType();
+            }
+            userType.getMethod(spec.nicknameGetter);
+            try {
+                userType.getMethod(spec.nicknameSetter, String.class, boolean.class);
+            } catch (NoSuchMethodException ignored) {
+                userType.getMethod(spec.nicknameSetter, String.class);
+            }
+            return true;
+        } catch (ReflectiveOperationException | LinkageError e) {
+            return false;
+        }
+    }
+
+    private void reply(CommandSender sender, String key) {
+        reply(sender, key, Map.of());
+    }
+
+    private void reply(CommandSender sender, String key, Map<String, String> placeholders) {
+        String prefix = getConfig().getString("messages.prefix", "&d" + brandName + " &8| &f");
+        String content = getConfig().getString("messages." + key, "&cMessage not configured: " + key);
+        String result = prefix + content;
+        for (Map.Entry<String, String> entry : placeholders.entrySet()) {
+            result = result.replace("%" + entry.getKey() + "%", entry.getValue());
+        }
+        sender.sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize(result));
     }
 
     private void sendSet(Player carrier, UUID id, String nick) {
@@ -234,7 +490,8 @@ public final class LegacyNickSyncPlugin extends JavaPlugin implements Listener, 
         try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(bytes))) {
             String action = in.readUTF();
             if ("NOTICE".equals(action)) {
-                carrier.sendMessage("§c" + in.readUTF());
+                String prefix = getConfig().getString("messages.notice-prefix", "&c");
+                carrier.sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize(prefix + in.readUTF()));
                 return;
             }
             if (!"APPLY".equals(action)) return;
@@ -281,14 +538,11 @@ public final class LegacyNickSyncPlugin extends JavaPlugin implements Listener, 
     }
 
     private Path userdataDirectory() {
-        hookEssentials();
-        if (essentials == null) return null;
-        try {
-            File folder = (File) essentials.getClass().getMethod("getDataFolder").invoke(essentials);
-            return folder.toPath().resolve("userdata");
-        } catch (ReflectiveOperationException e) {
-            return null;
-        }
+        HookSpec essentials = hookSpecs.stream().filter(spec -> spec.name.equals("EssentialsX") && spec.enabled)
+                .findFirst().orElse(null);
+        Plugin plugin = essentials == null || essentials.pluginName == null
+                ? null : Bukkit.getPluginManager().getPlugin(essentials.pluginName);
+        return plugin == null || !plugin.isEnabled() ? null : plugin.getDataFolder().toPath().resolve("userdata");
     }
 
     private void migrateAtStartup() {
@@ -356,9 +610,20 @@ public final class LegacyNickSyncPlugin extends JavaPlugin implements Listener, 
 
     @Override
     public void onDisable() {
+        if (placeholderExpansion != null) {
+            try {
+                placeholderExpansion.getClass().getMethod("unregister").invoke(placeholderExpansion);
+            } catch (ReflectiveOperationException e) {
+                getLogger().warning("Could not unregister the PlaceholderAPI expansion: " + e.getMessage());
+            }
+        }
         if (channel != null) {
             Bukkit.getMessenger().unregisterIncomingPluginChannel(this, channel, this);
             Bukkit.getMessenger().unregisterOutgoingPluginChannel(this, channel);
         }
     }
+
+    private record HookSpec(String name, boolean enabled, String pluginName, String lookupMethod,
+                            String nicknameGetter, String nicknameSetter, String userClass) { }
+    private record HookAccess(HookSpec spec, Object user) { }
 }

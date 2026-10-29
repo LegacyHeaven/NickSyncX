@@ -1,2 +1,2 @@
 rootProject.name = "NickSyncX"
-include("paper", "velocity")
+include("api", "paper", "velocity")

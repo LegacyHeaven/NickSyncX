@@ -15,7 +15,7 @@ if defined JAVA_HOME set "PATH=%JAVA_HOME%\bin;%PATH%"
 
 where java >nul 2>&1
 if errorlevel 1 (
-    echo [ERROR] Java was not found in PATH. Install JDK 25 and set JAVA_HOME.
+    echo [ERROR] Java was not found in PATH. Install JDK 21 or newer and set JAVA_HOME.
     pause
     exit /b 1
 )
@@ -55,40 +55,53 @@ if errorlevel 1 (
     exit /b 4
 )
 
-if not exist "paper\build\libs\paper-1.4.0.jar" (
-    echo [ERROR] Paper/Purpur JAR missing: paper\build\libs\paper-1.4.0.jar
+if not exist "paper\build\libs\paper-1.5.0.jar" (
+    echo [ERROR] Paper JAR missing: paper\build\libs\paper-1.5.0.jar
     echo See build-log.txt.
     pause
     exit /b 5
 )
-if not exist "velocity\build\libs\velocity-1.4.0.jar" (
-    echo [ERROR] Shaded Velocity JAR missing: velocity\build\libs\velocity-1.4.0.jar
+if not exist "velocity\build\libs\velocity-1.5.0.jar" (
+    echo [ERROR] Shaded Velocity JAR missing: velocity\build\libs\velocity-1.5.0.jar
     echo Do not use the -plain.jar.
     echo See build-log.txt.
     pause
     exit /b 6
 )
+if not exist "api\build\libs\NickSyncX-API-1.5.0.jar" (
+    echo [ERROR] NickSyncX API JAR missing: api\build\libs\NickSyncX-API-1.5.0.jar
+    echo See build-log.txt.
+    pause
+    exit /b 9
+)
 
 if not exist "dist" mkdir "dist"
-copy /Y "paper\build\libs\paper-1.4.0.jar" "dist\NickSyncX-Paper-1.4.0.jar" >nul
+copy /Y "paper\build\libs\paper-1.5.0.jar" "dist\NickSyncX-Paper-1.5.0.jar" >nul
 if errorlevel 1 (
     echo [ERROR] Failed to copy Paper JAR.
     pause
     exit /b 7
 )
-copy /Y "velocity\build\libs\velocity-1.4.0.jar" "dist\NickSyncX-Velocity-1.4.0.jar" >nul
+copy /Y "velocity\build\libs\velocity-1.5.0.jar" "dist\NickSyncX-Velocity-1.5.0.jar" >nul
 if errorlevel 1 (
     echo [ERROR] Failed to copy Velocity JAR.
     pause
     exit /b 8
+)
+copy /Y "api\build\libs\NickSyncX-API-1.5.0.jar" "dist\NickSyncX-API-1.5.0.jar" >nul
+if errorlevel 1 (
+    echo [ERROR] Failed to copy NickSyncX API JAR.
+    pause
+    exit /b 10
 )
 
 echo.
 echo ============================================================
 echo  BUILD SUCCESSFUL
 echo ============================================================
-echo Paper/Purpur: dist\NickSyncX-Paper-1.4.0.jar
-echo Velocity:     dist\NickSyncX-Velocity-1.4.0.jar
+echo Paper:        dist\NickSyncX-Paper-1.5.0.jar
+echo Velocity:     dist\NickSyncX-Velocity-1.5.0.jar
+echo API:          dist\NickSyncX-API-1.5.0.jar (developer compile-time dependency)
 echo Full build log: build-log.txt
 echo.
 echo Install the Paper JAR on each backend and the shaded Velocity JAR on the proxy.

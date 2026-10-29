@@ -24,8 +24,9 @@ import java.sql.*;
 import java.util.*;
 import java.util.concurrent.*;
 
-@Plugin(id = "nicksyncx", name = "NickSyncX", version = "1.4.0",
-    description = "Synchronizes only EssentialsX nicknames.", authors = {"LegacyHeaven"})
+@Plugin(id = "nicksyncx", name = "NickSyncX", version = "1.5.0",
+    description = "Synchronizes nicknames across Paper and Velocity servers.", authors = {"LegacyHeaven"},
+    url = "https://legacyheaven.dev")
 public final class LegacyNickSyncVelocity {
     private static final int PAGE_SIZE = 10;
     private static final long HISTORY_WINDOW_MILLIS = TimeUnit.HOURS.toMillis(24);
@@ -50,7 +51,17 @@ public final class LegacyNickSyncVelocity {
     private String storageType;
     private String adminPermission = "nicksyncx.admin";
     private Path sqliteFile;
+    private Path backupFile;
     private boolean debug;
+    private boolean automaticBackupEnabled;
+    private long backupIntervalMinutes;
+    private volatile long lastBackupAt;
+    private ScheduledFuture<?> automaticBackupTask;
+    private final ScheduledExecutorService backupScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread thread = new Thread(r, "NickSyncX-Backup-Scheduler");
+        thread.setDaemon(true);
+        return thread;
+    });
     private volatile boolean databaseReady;
 
     @Inject
@@ -74,11 +85,11 @@ public final class LegacyNickSyncVelocity {
             config = readSimpleYaml(configFile);
             brandName = value("branding.display-name", "NickSyncX");
             if (brandName == null || brandName.isBlank()) brandName = "NickSyncX";
-            String channelName = value("network.channel", "legacyheaven:nicksync");
+            String channelName = value("network.channel", "nicksync:sync");
             String[] parts = channelName.split(":", 2);
             if (parts.length != 2) throw new IOException("network.channel must be namespace:key");
             channel = MinecraftChannelIdentifier.create(parts[0], parts[1]);
-            storageType = value("storage.type", "mariadb").toLowerCase(Locale.ROOT);
+            storageType = value("storage.type", "sqlite").toLowerCase(Locale.ROOT);
             adminPermission = value("commands.admin-permission", "nicksyncx.admin");
             if ("legacynicksync.admin".equalsIgnoreCase(adminPermission)) {
                 adminPermission = "nicksyncx.admin";
@@ -89,12 +100,29 @@ public final class LegacyNickSyncVelocity {
             if (!sqliteFile.startsWith(directory.normalize())) {
                 throw new IOException("storage.sqlite.file must remain inside plugins/NickSyncX");
             }
+            backupFile = directory.resolve(value("storage.backup.file", "backups/nicksyncx.backup")).normalize();
+            if (!backupFile.startsWith(directory.normalize())) {
+                throw new IOException("storage.backup.file must remain inside plugins/NickSyncX");
+            }
+            automaticBackupEnabled = Boolean.parseBoolean(value("storage.backup.automatic", "true"));
+            backupIntervalMinutes = Long.parseLong(value("storage.backup.interval-minutes", "60"));
+            if (automaticBackupEnabled && backupIntervalMinutes < 1) {
+                throw new IOException("storage.backup.interval-minutes must be at least 1 when automatic backups are enabled");
+            }
             proxy.getChannelRegistrar().register(channel);
             initializeDatabase();
             loadRecords();
             importLegacyFileIfNeeded();
+            if (Files.isRegularFile(backupFile)) {
+                try {
+                    lastBackupAt = Files.getLastModifiedTime(backupFile).toMillis();
+                } catch (IOException e) {
+                    logger.warn("Could not read the backup file timestamp.", e);
+                }
+            }
             databaseReady = true;
             registerAdminCommand();
+            scheduleAutomaticBackups();
             logger.info("{} loaded {} nickname records using {} storage.", brandName, records.size(), storageType);
         } catch (Exception e) {
             logger.error("{} could not initialize. Nickname updates will be rejected until restart.", brandName, e);
@@ -138,7 +166,7 @@ public final class LegacyNickSyncVelocity {
                                     + " currently has higher priority. Change it there, or use /nicksync force to override network priority.");
                         }
                         if (m.action.equals("SYNC") || debug) logger.info("Rejected nickname update for {} from {} (weight {}); authority is {} (weight {}).",
-                                m.uuid, m.source, m.weight, old.source, old.weight);
+                            m.uuid, m.source, m.weight, old == null ? "none" : old.source, old == null ? "none" : old.weight);
                         return;
                     }
 
@@ -166,6 +194,21 @@ public final class LegacyNickSyncVelocity {
     @Subscribe
     public void shutdown(ProxyShutdownEvent event) {
         databaseReady = false;
+        if (automaticBackupTask != null) automaticBackupTask.cancel(false);
+        backupScheduler.shutdownNow();
+        if (automaticBackupEnabled && connection != null) {
+            try {
+                databaseWorker.execute(() -> {
+                    try {
+                        writeBackup(backupFile, false);
+                    } catch (IOException | SQLException e) {
+                        logger.error("Could not create shutdown database backup.", e);
+                    }
+                });
+            } catch (RejectedExecutionException e) {
+                logger.warn("Could not queue the shutdown database backup.", e);
+            }
+        }
         databaseWorker.shutdown();
         try {
             if (!databaseWorker.awaitTermination(5, TimeUnit.SECONDS)) databaseWorker.shutdownNow();
@@ -243,8 +286,8 @@ public final class LegacyNickSyncVelocity {
         } else if (storageType.equals("mysql") || storageType.equals("mariadb")) {
             String host = value("storage.mysql.host", "127.0.0.1");
             int port = Integer.parseInt(value("storage.mysql.port", "3306"));
-            String database = value("storage.mysql.database", "legacy_nicksync");
-            String user = value("storage.mysql.username", "legacy_nicksync");
+            String database = value("storage.mysql.database", "nicksync");
+            String user = value("storage.mysql.username", "nicksync");
             String password = value("storage.mysql.password", "CHANGE_ME");
             String params = value("storage.mysql.parameters", "useSSL=false&serverTimezone=UTC");
             boolean mariaDb = storageType.equals("mariadb");
@@ -349,7 +392,35 @@ public final class LegacyNickSyncVelocity {
                         }
                         String[] args = invocation.arguments();
                         if (args.length == 0) {
-                            source.sendMessage(Component.text("Usage: /nicksyncx current [page] | /nicksyncx history [page]"));
+                            source.sendMessage(Component.text("Usage: /nicksyncx <current|history|health|backup|restore confirm> [page]"));
+                            return;
+                        }
+                        if (args[0].equalsIgnoreCase("health")) {
+                            queueHealth(source);
+                            return;
+                        }
+                        if (args[0].equalsIgnoreCase("backup")) {
+                            if (args.length != 1) {
+                                source.sendMessage(Component.text("Usage: /nicksyncx backup"));
+                                return;
+                            }
+                            queueBackup(source);
+                            return;
+                        }
+                        if (args[0].equalsIgnoreCase("restore")) {
+                            if (args.length != 2 || !args[1].equalsIgnoreCase("confirm")) {
+                                source.sendMessage(Component.text("This replaces the active nickname data. Run /nicksyncx restore confirm to continue."));
+                                return;
+                            }
+                            queueRestore(source);
+                            return;
+                        }
+                        if (!args[0].equalsIgnoreCase("current") && !args[0].equalsIgnoreCase("history")) {
+                            source.sendMessage(Component.text("Usage: /nicksyncx <current|history|health|backup|restore confirm> [page]"));
+                            return;
+                        }
+                        if (args.length > 2) {
+                            source.sendMessage(Component.text("Usage: /nicksyncx " + args[0].toLowerCase(Locale.ROOT) + " [page]"));
                             return;
                         }
                         int page;
@@ -365,10 +436,8 @@ public final class LegacyNickSyncVelocity {
                         }
                         if (args[0].equalsIgnoreCase("current")) {
                             showCurrent(source, page);
-                        } else if (args[0].equalsIgnoreCase("history")) {
-                            showHistory(source, page);
                         } else {
-                            source.sendMessage(Component.text("Usage: /nicksyncx current [page] | /nicksyncx history [page]"));
+                            showHistory(source, page);
                         }
                     }
                 });
@@ -376,7 +445,7 @@ public final class LegacyNickSyncVelocity {
 
     private void showCurrent(CommandSource source, int page) {
         List<Record> current = records.values().stream()
-                .sorted(Comparator.comparingLong(Record::timestamp).reversed())
+            .sorted((first, second) -> Long.compare(second.timestamp(), first.timestamp()))
                 .toList();
         int pages = Math.max(1, (current.size() + PAGE_SIZE - 1) / PAGE_SIZE);
         int start = (page - 1) * PAGE_SIZE;
@@ -386,10 +455,218 @@ public final class LegacyNickSyncVelocity {
         }
         source.sendMessage(Component.text("Current " + brandName + " records (" + current.size() + "), page " + page + "/" + pages + ":"));
         current.stream().skip(start).limit(PAGE_SIZE).forEach(record -> {
-            String playerName = proxy.getPlayer(record.uuid).map(Player::getUsername).orElse(record.uuid.toString());
+            String playerName = proxy.getPlayer(record.uuid).map(player -> player.getUsername()).orElse(record.uuid.toString());
             source.sendMessage(Component.text(formatRecord(playerName, record.nickname, record.source,
                     record.weight, record.timestamp)));
         });
+    }
+
+    private void scheduleAutomaticBackups() {
+        if (!automaticBackupEnabled) return;
+        automaticBackupTask = backupScheduler.scheduleWithFixedDelay(() -> {
+            try {
+                databaseWorker.execute(() -> {
+                    try {
+                        writeBackup(backupFile, true);
+                    } catch (IOException | SQLException e) {
+                        logger.error("Automatic database backup failed.", e);
+                    }
+                });
+            } catch (RejectedExecutionException e) {
+                if (databaseReady) logger.warn("Could not queue the automatic database backup.", e);
+            }
+        }, backupIntervalMinutes, backupIntervalMinutes, TimeUnit.MINUTES);
+    }
+
+    private void queueBackup(CommandSource source) {
+        if (!databaseReady) {
+            source.sendMessage(Component.text(brandName + " database is not ready."));
+            return;
+        }
+        source.sendMessage(Component.text("Creating a database backup at " + backupFile + "..."));
+        try {
+            databaseWorker.execute(() -> {
+                try {
+                    writeBackup(backupFile, false);
+                    source.sendMessage(Component.text("Database backup created: " + backupFile));
+                } catch (IOException | SQLException e) {
+                    logger.error("Could not create database backup.", e);
+                    source.sendMessage(Component.text("Backup failed. Check the proxy log for details."));
+                }
+            });
+        } catch (RejectedExecutionException e) {
+            source.sendMessage(Component.text("Database worker is stopping; backup was not queued."));
+        }
+    }
+
+    private void queueRestore(CommandSource source) {
+        if (!databaseReady) {
+            source.sendMessage(Component.text(brandName + " database is not ready."));
+            return;
+        }
+        source.sendMessage(Component.text("Restoring " + backupFile + ". A pre-restore snapshot will be saved first."));
+        try {
+            databaseWorker.execute(() -> {
+                try {
+                    if (!Files.isRegularFile(backupFile)) throw new IOException("Configured backup file does not exist");
+                    Path safetyBackup = backupFile.resolveSibling(backupFile.getFileName()
+                            + ".pre-restore-" + System.currentTimeMillis());
+                    writeBackup(safetyBackup, false);
+                    restoreBackup(backupFile);
+                    records.clear();
+                    loadRecords();
+                    for (Player player : proxy.getAllPlayers()) {
+                        Record record = records.get(player.getUniqueId());
+                        sendApply(player, player.getUniqueId(), record == null ? "" : record.nickname);
+                    }
+                    source.sendMessage(Component.text("Restore completed. Pre-restore snapshot: " + safetyBackup));
+                } catch (IOException | SQLException e) {
+                    logger.error("Could not restore database backup.", e);
+                    source.sendMessage(Component.text("Restore failed. Check the proxy log; the current database was rolled back."));
+                }
+            });
+        } catch (RejectedExecutionException e) {
+            source.sendMessage(Component.text("Database worker is stopping; restore was not queued."));
+        }
+    }
+
+    private void queueHealth(CommandSource source) {
+        if (!databaseReady) {
+            source.sendMessage(Component.text(brandName + " database is not ready."));
+            return;
+        }
+        try {
+            databaseWorker.execute(() -> {
+                try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(
+                        "SELECT (SELECT COUNT(*) FROM " + NICKNAME_TABLE + "), (SELECT COUNT(*) FROM " + SYNC_EVENTS_TABLE + ")")) {
+                    if (!result.next()) throw new SQLException("Health query returned no result");
+                    String backupState = Files.isRegularFile(backupFile)
+                            ? "present, " + Files.size(backupFile) + " bytes"
+                            : "missing";
+                    String backupTime = lastBackupAt == 0 ? "not yet created"
+                            : java.time.format.DateTimeFormatter.ISO_INSTANT.format(
+                                    java.time.Instant.ofEpochMilli(lastBackupAt));
+                    source.sendMessage(Component.text(brandName + " database health: OK"));
+                    source.sendMessage(Component.text("Storage: " + storageType + "; nickname rows: "
+                            + result.getLong(1) + "; history rows: " + result.getLong(2)));
+                    source.sendMessage(Component.text("Backup: " + backupState + "; last completed: " + backupTime));
+                    source.sendMessage(Component.text("Automatic backup: " + (automaticBackupEnabled
+                            ? "every " + backupIntervalMinutes + " minutes" : "disabled")));
+                } catch (IOException | SQLException e) {
+                    logger.error("Database health check failed.", e);
+                    source.sendMessage(Component.text(brandName + " database health: FAILED. Check the proxy log."));
+                }
+            });
+        } catch (RejectedExecutionException e) {
+            source.sendMessage(Component.text("Database worker is stopping; health check was not queued."));
+        }
+    }
+
+    private void writeBackup(Path target, boolean automatic) throws IOException, SQLException {
+        Path temporary = target.resolveSibling(target.getFileName() + ".tmp");
+        try {
+            Files.createDirectories(target.getParent());
+            try (BufferedWriter writer = Files.newBufferedWriter(temporary, StandardCharsets.UTF_8,
+                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)) {
+                writer.write("NICKSYNCX_BACKUP\t1");
+                writer.newLine();
+                writer.write("META\t" + System.currentTimeMillis() + "\t" + storageType);
+                writer.newLine();
+                try (Statement statement = connection.createStatement(); ResultSet rows = statement.executeQuery(
+                        "SELECT uuid,nickname,source,weight,updated_at FROM " + NICKNAME_TABLE)) {
+                    while (rows.next()) {
+                        writer.write(String.join("\t", "N", rows.getString("uuid"), encode(rows.getString("nickname")),
+                                encode(rows.getString("source")), Integer.toString(rows.getInt("weight")),
+                                Long.toString(rows.getLong("updated_at"))));
+                        writer.newLine();
+                    }
+                }
+                try (Statement statement = connection.createStatement(); ResultSet rows = statement.executeQuery(
+                        "SELECT event_id,uuid,action,nickname,source,weight,occurred_at FROM " + SYNC_EVENTS_TABLE)) {
+                    while (rows.next()) {
+                        writer.write(String.join("\t", "E", rows.getString("event_id"), rows.getString("uuid"),
+                                encode(rows.getString("action")), encode(rows.getString("nickname")),
+                                encode(rows.getString("source")), Integer.toString(rows.getInt("weight")),
+                                Long.toString(rows.getLong("occurred_at"))));
+                        writer.newLine();
+                    }
+                }
+            }
+            try {
+                Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
+            }
+            if (target.equals(backupFile)) lastBackupAt = System.currentTimeMillis();
+            if (automatic) logger.info("Automatic database backup completed: {}", target);
+        } catch (IOException | SQLException e) {
+            try { Files.deleteIfExists(temporary); } catch (IOException ignored) { }
+            throw e;
+        }
+    }
+
+    private void restoreBackup(Path backup) throws IOException, SQLException {
+        long backupTimestamp = Files.getLastModifiedTime(backup).toMillis();
+        boolean previousAutoCommit = connection.getAutoCommit();
+        connection.setAutoCommit(false);
+        try (BufferedReader reader = Files.newBufferedReader(backup, StandardCharsets.UTF_8)) {
+            String header = reader.readLine();
+            if (!"NICKSYNCX_BACKUP\t1".equals(header)) throw new IOException("Unsupported backup format");
+            String metadata = reader.readLine();
+            if (metadata == null || !metadata.startsWith("META\t")) throw new IOException("Backup metadata is missing");
+            try (Statement statement = connection.createStatement()) {
+                statement.executeUpdate("DELETE FROM " + NICKNAME_TABLE);
+                statement.executeUpdate("DELETE FROM " + SYNC_EVENTS_TABLE);
+            }
+            try (PreparedStatement nicknameInsert = connection.prepareStatement(
+                    "INSERT INTO " + NICKNAME_TABLE + "(uuid,nickname,source,weight,updated_at) VALUES(?,?,?,?,?)");
+                 PreparedStatement eventInsert = connection.prepareStatement(
+                    "INSERT INTO " + SYNC_EVENTS_TABLE + "(event_id,uuid,action,nickname,source,weight,occurred_at) VALUES(?,?,?,?,?,?,?)")) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    String[] fields = line.split("\\t", -1);
+                    if (fields[0].equals("N") && fields.length == 6) {
+                        UUID.fromString(fields[1]);
+                        nicknameInsert.setString(1, fields[1]);
+                        nicknameInsert.setString(2, decode(fields[2]));
+                        nicknameInsert.setString(3, decode(fields[3]));
+                        nicknameInsert.setInt(4, Integer.parseInt(fields[4]));
+                        nicknameInsert.setLong(5, Long.parseLong(fields[5]));
+                        nicknameInsert.executeUpdate();
+                    } else if (fields[0].equals("E") && fields.length == 8) {
+                        UUID.fromString(fields[1]);
+                        UUID.fromString(fields[2]);
+                        eventInsert.setString(1, fields[1]);
+                        eventInsert.setString(2, fields[2]);
+                        eventInsert.setString(3, decode(fields[3]));
+                        eventInsert.setString(4, decode(fields[4]));
+                        eventInsert.setString(5, decode(fields[5]));
+                        eventInsert.setInt(6, Integer.parseInt(fields[6]));
+                        eventInsert.setLong(7, Long.parseLong(fields[7]));
+                        eventInsert.executeUpdate();
+                    } else {
+                        throw new IOException("Backup contains an invalid row");
+                    }
+                }
+            }
+            connection.commit();
+            lastBackupAt = backupTimestamp;
+        } catch (RuntimeException | IOException | SQLException e) {
+            connection.rollback();
+            if (e instanceof IOException ioException) throw ioException;
+            if (e instanceof SQLException sqlException) throw sqlException;
+            throw new IOException("Backup contains invalid data", e);
+        } finally {
+            connection.setAutoCommit(previousAutoCommit);
+        }
+    }
+
+    private String encode(String value) {
+        return Base64.getEncoder().encodeToString(value.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private String decode(String value) {
+        return new String(Base64.getDecoder().decode(value), StandardCharsets.UTF_8);
     }
 
     private void showHistory(CommandSource source, int page) {
@@ -431,7 +708,7 @@ public final class LegacyNickSyncVelocity {
                 }
                 source.sendMessage(Component.text("Accepted syncs in the last 24 hours (" + total + "), page " + page + "/" + pages + ":"));
                 for (SyncEvent event : events) {
-                    String playerName = proxy.getPlayer(event.uuid).map(Player::getUsername).orElse(event.uuid.toString());
+                    String playerName = proxy.getPlayer(event.uuid).map(player -> player.getUsername()).orElse(event.uuid.toString());
                     source.sendMessage(Component.text(formatRecord(playerName, event.nickname, event.source,
                             event.weight, event.occurredAt) + " action=" + event.action));
                 }

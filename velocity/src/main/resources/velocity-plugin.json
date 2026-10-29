@@ -3,6 +3,7 @@
   "name": "NickSyncX",
   "version": "${version}",
   "main": "dev.legacyheaven.nicksync.velocity.LegacyNickSyncVelocity",
-  "description": "Synchronizes only EssentialsX nicknames across Legacy Play.",
-  "authors": ["LegacyHeaven"]
+  "description": "Synchronizes nicknames across Paper and Velocity servers.",
+  "authors": ["LegacyHeaven"],
+  "url": "https://legacyheaven.dev"
 }

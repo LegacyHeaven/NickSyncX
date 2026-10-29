@@ -1,0 +1,21 @@
+name: NickSyncX
+version: ${version}
+main: dev.legacyheaven.nicksync.LegacyNickSyncPlugin
+description: Synchronizes nicknames across Paper and Velocity servers.
+authors: [LegacyHeaven]
+website: https://legacyheaven.dev
+api-version: '1.20'
+dependencies:
+  server:
+    Essentials:
+      load: BEFORE
+      required: false
+      join-classpath: true
+    CMI:
+      load: BEFORE
+      required: false
+      join-classpath: true
+    PlaceholderAPI:
+      load: BEFORE
+      required: false
+      join-classpath: true

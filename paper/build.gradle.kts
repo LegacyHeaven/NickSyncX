@@ -1,17 +1,25 @@
 plugins { java }
 
-java {
-    toolchain { languageVersion.set(JavaLanguageVersion.of(25)) }
+dependencies {
+    implementation(project(":api"))
+    compileOnly("io.papermc.paper:paper-api:1.20.4-R0.1-SNAPSHOT")
+    compileOnly("me.clip:placeholderapi:2.11.6")
 }
 
-dependencies {
-    compileOnly("org.purpurmc.purpur:purpur-api:26.2.build.2621-stable")
+repositories {
+    maven("https://repo.extendedclip.com/content/repositories/placeholderapi/")
 }
 
 tasks.withType<JavaCompile>().configureEach {
-    options.release.set(25)
+    options.release.set(17)
+}
+
+tasks.jar {
+    from(project(":api").extensions.getByType<org.gradle.api.tasks.SourceSetContainer>()
+        .getByName("main").output)
 }
 
 tasks.processResources {
     filesMatching("plugin.yml") { expand("version" to project.version) }
+    filesMatching("paper-plugin.yml") { expand("version" to project.version) }
 }

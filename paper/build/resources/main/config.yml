@@ -2,20 +2,48 @@ branding:
   display-name: "NickSyncX"
 
 server:
-  name: "change-me"
+  name: "server-1"
   weight: 0
 
 migration:
   enabled: false
 
 network:
-  channel: "legacyheaven:nicksync"
+  channel: "nicksync:sync"
 
-essentialsx:
-  hook: true
+hooks:
+  api:
+    enabled: true
+  essentialsx:
+    enabled: true
+    plugin-name: "Essentials"
+  cmi:
+    enabled: false
+    plugin-name: "CMI"
+  custom:
+    enabled: false
+    plugin-name: "YourNicknamePlugin"
+    user-class: ""
+    user-lookup-method: "getUser"
+    nickname-getter: "getNickname"
+    nickname-setter: "setNickname"
 
 commands:
   permission: "nicksyncx.sync"
+
+messages:
+  prefix: "&dNickSyncX &8| &f"
+  usage: "Usage: /nicksync [sync [player]|force|status]"
+  usage-console: "Usage: /nicksync sync <player>"
+  no-permission: "You do not have permission to use this command."
+  player-only: "Only a player can use force sync."
+  player-not-online: "That player must be online on this server."
+  nickname-unavailable: "Could not read the nickname. Check your enabled nickname hook."
+  sync-sent: "Sync request sent for &d%player%&f. Nickname: &d%nickname%&f. The proxy applies it if this server has enough priority."
+  force-sent: "Force request sent for &d%player%&f. Nickname: &d%nickname%&f. Network priority is overridden."
+  status-header: "Backend integration status:"
+  no-nickname: "(no nickname)"
+  notice-prefix: "&c"
 
 performance:
   poll-interval-ticks: 6000
